@@ -1,18 +1,15 @@
 'use client';
 
-import React, { useState } from 'react';
-import { Document, Page, pdfjs } from 'react-pdf';
+import React from 'react';
 import Link from 'next/link';
+import dynamic from 'next/dynamic';
 
-// Set worker source for react-pdf
-pdfjs.GlobalWorkerOptions.workerSrc = `//unpkg.com/pdfjs-dist@${pdfjs.version}/build/pdf.worker.min.js`;
+const DynamicPdfViewer = dynamic(() => import('@/components/rfp/PdfViewer'), {
+    ssr: false,
+    loading: () => <div className="text-center p-4">Loading PDF Viewer...</div>
+});
 
 export default function RFPPage() {
-    const [numPages, setNumPages] = useState<number | null>(null);
-
-    function onDocumentLoadSuccess({ numPages }: { numPages: number }) {
-        setNumPages(numPages);
-    }
 
     return (
         <div className="flex flex-col h-screen bg-gray-50">
@@ -32,22 +29,11 @@ export default function RFPPage() {
 
             <div className="flex-1 overflow-auto p-8 flex justify-center">
                 <div className="bg-white shadow-lg p-4 rounded-lg min-h-[800px]">
-                    <Document
-                        file="/rfp.pdf"
-                        onLoadSuccess={onDocumentLoadSuccess}
-                        className="flex flex-col gap-4"
-                    >
-                        {Array.from(new Array(numPages), (el, index) => (
-                            <Page
-                                key={`page_${index + 1}`}
-                                pageNumber={index + 1}
-                                renderTextLayer={false}
-                                renderAnnotationLayer={false}
-                                width={800}
-                                className="border border-gray-200 shadow-sm"
-                            />
-                        ))}
-                    </Document>
+                    <div className="flex-1 overflow-auto p-8 flex justify-center">
+                        <div className="bg-white shadow-lg p-4 rounded-lg min-h-[800px]">
+                            <DynamicPdfViewer url="/rfp.pdf" />
+                        </div>
+                    </div>
                 </div>
             </div>
         </div>
