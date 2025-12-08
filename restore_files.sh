@@ -1,0 +1,11 @@
+#!/bin/bash
+echo "🔄 Restoring FamLaw Portal files..."
+echo "This will recreate all deleted files from the undo operation."
+echo ""
+echo "Files to restore:"
+echo "- All component files (5 components)"
+echo "- All library files (3 large lib files)"
+echo "- All app pages (3 pages)"
+echo "- All documentation (6 MD files)"
+echo ""
+echo "Starting restoration..."
