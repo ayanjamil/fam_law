@@ -1,6 +1,9 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   reactStrictMode: true,
+  experimental: {
+    serverComponentsExternalPackages: ['mammoth', 'pdf-parse'],
+  },
   webpack: (config) => {
     config.resolve.alias.canvas = false;
     return config;
@@ -8,4 +11,3 @@ const nextConfig = {
 }
 
 module.exports = nextConfig
-
