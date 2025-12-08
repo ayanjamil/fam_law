@@ -1,10 +1,6 @@
 'use client';
 
 import React, { useState, useEffect } from 'react';
-import { pdfjs } from 'react-pdf';
-
-// Set worker source
-pdfjs.GlobalWorkerOptions.workerSrc = `//unpkg.com/pdfjs-dist@${pdfjs.version}/build/pdf.worker.min.js`;
 
 interface RequestItem {
     id: number;
@@ -41,6 +37,10 @@ export default function ResponseGeneratorPage() {
     useEffect(() => {
         async function loadPdf() {
             try {
+                // Dynamically import react-pdf to avoid SSR issues with DOMMatrix
+                const { pdfjs } = await import('react-pdf');
+                pdfjs.GlobalWorkerOptions.workerSrc = `//unpkg.com/pdfjs-dist@${pdfjs.version}/build/pdf.worker.min.js`;
+
                 const loadingTask = pdfjs.getDocument('/rfp.pdf');
                 const pdf = await loadingTask.promise;
                 let fullText = '';
@@ -170,8 +170,8 @@ export default function ResponseGeneratorPage() {
                                             key={key}
                                             onClick={() => handleToggle(req.id, key as keyof typeof OBJECTIONS)}
                                             className={`px-3 py-1.5 rounded-full text-sm font-medium transition-colors border ${isActive
-                                                    ? 'bg-blue-100 text-blue-800 border-blue-200'
-                                                    : 'bg-white text-gray-600 border-gray-300 hover:bg-gray-50'
+                                                ? 'bg-blue-100 text-blue-800 border-blue-200'
+                                                : 'bg-white text-gray-600 border-gray-300 hover:bg-gray-50'
                                                 }`}
                                         >
                                             {displayLabel}
