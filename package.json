@@ -10,12 +10,15 @@
     "generate-rfp-pdf": "node scripts/generateRFPpdf.js"
   },
   "dependencies": {
+    "docx": "^9.5.1",
+    "file-saver": "^2.0.5",
     "framer-motion": "^10.16.4",
     "inherits": "^2.0.4",
     "jspdf": "^3.0.4",
     "lucide-react": "^0.292.0",
     "mammoth": "^1.6.0",
     "next": "^14.0.0",
+    "openai": "^6.10.0",
     "pdf-lib": "^1.17.1",
     "pdf-parse": "^1.1.4",
     "pdfjs-dist": "^5.4.449",
@@ -25,6 +28,7 @@
     "zustand": "^4.4.7"
   },
   "devDependencies": {
+    "@types/file-saver": "^2.0.7",
     "@types/node": "^20.0.0",
     "@types/pdf-parse": "^1.1.4",
     "@types/react": "^18.2.0",

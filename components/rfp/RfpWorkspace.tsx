@@ -10,6 +10,8 @@ import {
     Maximize2
 } from 'lucide-react'
 import { jsPDF } from 'jspdf'
+import { Document, Packer, Paragraph, TextRun, HeadingLevel } from 'docx'
+import { saveAs } from 'file-saver'
 
 interface RfpRequest {
     id: number
@@ -35,48 +37,145 @@ const AI_OBJECTIONS = [
 export default function RfpWorkspace({ documentText, requests, fileName = "Request For Production.pdf" }: RfpWorkspaceProps) {
     const [activeRequest, setActiveRequest] = useState<number | null>(null)
     const [responses, setResponses] = useState<Record<number, string>>({})
+    const [loadingRequest, setLoadingRequest] = useState<number | null>(null)
     const [leftPanelWidth, setLeftPanelWidth] = useState(50) // Percentage
+
+    // Refs for scrolling
+    const documentContainerRef = useRef<HTMLDivElement>(null)
+    const requestRefs = useRef<Record<number, HTMLSpanElement | null>>({})
+
+    // Auto-scroll effect
+    useEffect(() => {
+        if (activeRequest && requestRefs.current[activeRequest] && documentContainerRef.current) {
+            const element = requestRefs.current[activeRequest]
+            if (element) {
+                element.scrollIntoView({ behavior: 'smooth', block: 'center' })
+            }
+        }
+    }, [activeRequest])
 
     const handleResponseChange = (id: number, text: string) => {
         setResponses(prev => ({ ...prev, [id]: text }))
     }
 
-    const applyObjection = (id: number, objectionText: string) => {
-        // Replace the content with the selected objection to prevent stacking
-        handleResponseChange(id, objectionText)
+    const generateAIResponse = async (id: number, type: 'objection' | 'refine', data: string) => {
+        setLoadingRequest(id)
+        const currentReq = requests.find(r => r.id === id)
+        if (!currentReq) {
+            setLoadingRequest(null)
+            return
+        }
+
+        try {
+            const payload: any = {
+                requestText: currentReq.text,
+            }
+
+            if (type === 'objection') {
+                payload.objectionType = data
+            } else {
+                payload.currentResponse = data
+            }
+
+            const res = await fetch('/api/refine-response', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            })
+
+            const result = await res.json()
+            if (result.success && result.text) {
+                handleResponseChange(id, result.text)
+            } else {
+                console.error("Failed to generate:", result)
+            }
+        } catch (err) {
+            console.error("API call failed:", err)
+        } finally {
+            setLoadingRequest(null)
+        }
+    }
+
+    const applyObjection = (id: number, objectionLabel: string) => {
+        generateAIResponse(id, 'objection', objectionLabel)
     }
 
     const refineResponse = (id: number) => {
         const current = responses[id] || ""
-        if (!current) return
-
-        // Mock AI refinement
-        const refined = `[AI Refined] ${current}\n\nAdditionally, the responding party reserves the right to amend this response upon discovery of further information.`
-        handleResponseChange(id, refined)
+        generateAIResponse(id, 'refine', current)
     }
 
-    // Helper to highlight active request text in the document
+    // Helper to highlight active request text and show response inline
     const renderDocumentText = () => {
-        if (!activeRequest) return documentText
+        if (!requests.length) return documentText
 
-        const activeReq = requests.find(r => r.id === activeRequest)
-        if (!activeReq || !activeReq.text) return documentText
+        // This is a simplified approach. In a real app, we'd need more robust tokenization.
+        // We will try to reconstruct the document by iterating through requests and existing text.
+        // For this demo, let's assume the text chunks are split by the exact request strings.
 
-        // Simple split/join strategy for highlighting
-        // Note: This assumes exact text match. For more robustness, fuzzy matching would be needed.
-        const parts = documentText.split(activeReq.text)
-        if (parts.length === 1) return documentText
+        // We'll create a map of text segments to render.
+        // Since we can't easily "split" complex PDFs by string matching uniquely if there are duplicates,
+        // we will try to just highlight found matches.
 
-        return parts.map((part, i) => (
-            <span key={i}>
-                {part}
-                {i < parts.length - 1 && (
-                    <span className="bg-yellow-200 transition-colors duration-300 rounded px-1 -mx-1">
-                        {activeReq.text}
+        // Better approach for the demo: 
+        // We will split the full text by the request texts we found.
+        let nodes: React.ReactNode[] = []
+        let currentText = documentText
+        let globalOffset = 0
+
+        // We need to sort requests by their position in text to process linearly
+        // But our parsing logic didn't give us indices here (it did in the route, but we only have text).
+        // Let's assume the 'requests' array is in order.
+
+        let lastIndex = 0
+
+        // We will build an array of elements.
+        // This is tricky without exact indices. Let's do a best-effort split.
+        // We will treat the whole document as a sequence of: [Text Before] -> [Request] -> [Response Preview] -> [Text After]...
+
+        // To make this work visually for the user without complex re-parsing:
+        // We will match the first occurrence of each request text after the previous one.
+
+        let remainingText = documentText
+
+        requests.forEach((req, idx) => {
+            const matchIndex = remainingText.indexOf(req.text)
+            if (matchIndex !== -1) {
+                // Text before this request
+                const before = remainingText.slice(0, matchIndex)
+                nodes.push(<span key={`text-${idx}`}>{before}</span>)
+
+                // The request itself (Highlighted if active)
+                nodes.push(
+                    <span
+                        key={`req-${req.id}`}
+                        ref={(el) => { requestRefs.current[req.id] = el }}
+                        className={`transition-colors duration-300 rounded px-1 -mx-1 ${activeRequest === req.id ? 'bg-yellow-200' : 'hover:bg-yellow-50'}`}
+                    >
+                        {req.text}
                     </span>
-                )}
-            </span>
-        ))
+                )
+
+                // The RESPONSE Preview (Inline)
+                const currentResponse = responses[req.id]
+                if (currentResponse) {
+                    nodes.push(
+                        <div key={`resp-${req.id}`} className="my-4 pl-4 border-l-2 border-blue-500 bg-blue-50 p-3 rounded-r-lg">
+                            <span className="block text-xs font-bold text-blue-600 mb-1">DRAFT RESPONSE:</span>
+                            <span className="font-sans text-blue-900 whitespace-pre-wrap">{currentResponse}</span>
+                        </div>
+                    )
+                }
+
+                // Advance
+                remainingText = remainingText.slice(matchIndex + req.text.length)
+            }
+        })
+
+        // Add any remaining text
+        nodes.push(<span key="text-end">{remainingText}</span>)
+
+        return nodes
     }
 
     // Export responses to a PDF file
@@ -96,38 +195,32 @@ export default function RfpWorkspace({ documentText, requests, fileName = "Reque
         requests.forEach((req) => {
             const response = responses[req.id] || "[No response provided]"
 
-            // Check for page break
             if (yPos > 270) {
                 doc.addPage()
                 yPos = 20
             }
 
-            // Request Header
             doc.setFont("helvetica", "bold")
             doc.setFontSize(11)
             doc.text(`REQUEST NO. ${req.id}`, margin, yPos)
             yPos += 7
 
-            // Request Text
             doc.setFont("helvetica", "italic")
             doc.setFontSize(10)
             const splitReq = doc.splitTextToSize(req.text, maxLineWidth)
             doc.text(splitReq, margin, yPos)
             yPos += (splitReq.length * 5) + 5
 
-            // Check for page break before response
             if (yPos > 270) {
                 doc.addPage()
                 yPos = 20
             }
 
-            // Response Header
             doc.setFont("helvetica", "bold")
             doc.setFontSize(10)
             doc.text("RESPONSE:", margin, yPos)
             yPos += 5
 
-            // Response Body
             doc.setFont("helvetica", "normal")
             const splitResp = doc.splitTextToSize(response, maxLineWidth)
             doc.text(splitResp, margin, yPos)
@@ -137,48 +230,51 @@ export default function RfpWorkspace({ documentText, requests, fileName = "Reque
         doc.save(`${fileName.replace(/\.[^/.]+$/, "")}_responses.pdf`)
     }
 
+    const handleExportWord = async () => {
+        const doc = new Document({
+            sections: [{
+                properties: {},
+                children: [
+                    new Paragraph({
+                        text: "RESPONSES TO REQUEST FOR PRODUCTION",
+                        heading: HeadingLevel.HEADING_1,
+                        spacing: { after: 300 }
+                    }),
+                    ...requests.flatMap(req => [
+                        new Paragraph({
+                            text: `REQUEST NO. ${req.id}`,
+                            heading: HeadingLevel.HEADING_3,
+                            spacing: { before: 200, after: 100 }
+                        }),
+                        new Paragraph({
+                            children: [
+                                new TextRun({ text: req.text, italics: true })
+                            ],
+                            spacing: { after: 200 }
+                        }),
+                        new Paragraph({
+                            children: [
+                                new TextRun({ text: "RESPONSE:", bold: true }),
+                            ],
+                            spacing: { after: 100 }
+                        }),
+                        new Paragraph({
+                            text: responses[req.id] || "[No response provided]",
+                            spacing: { after: 400 }
+                        })
+                    ])
+                ]
+            }]
+        })
+
+        const blob = await Packer.toBlob(doc)
+        saveAs(blob, `${fileName.replace(/\.[^/.]+$/, "")}_responses.docx`)
+    }
+
     return (
         <div className="flex h-screen overflow-hidden bg-neutral-100">
-            {/* Left Panel: Document Viewer */}
-            <div
-                className="flex flex-col border-r border-neutral-200 bg-white"
-                style={{ width: `${leftPanelWidth}%` }}
-            >
-                <div className="flex items-center justify-between p-4 border-b border-neutral-100 bg-white sticky top-0 z-10">
-                    <div className="flex items-center gap-2">
-                        <div className="p-2 bg-red-100 rounded text-red-600">
-                            <FileText className="w-5 h-5" />
-                        </div>
-                        <div>
-                            <h2 className="font-semibold text-neutral-900 line-clamp-1 max-w-[200px]">{fileName}</h2>
-                            <p className="text-xs text-neutral-500">{requests.length} Requests found</p>
-                        </div>
-                    </div>
-                    <div className="flex gap-2">
-                        <button className="p-2 hover:bg-neutral-50 rounded-full text-neutral-400">
-                            <Search className="w-5 h-5" />
-                        </button>
-                        <button className="p-2 hover:bg-neutral-50 rounded-full text-neutral-400">
-                            <Maximize2 className="w-5 h-5" />
-                        </button>
-                    </div>
-                </div>
-
-                <div className="flex-1 overflow-y-auto p-8 bg-neutral-50">
-                    <div className="bg-white shadow-sm ring-1 ring-neutral-200 min-h-[800px] p-12 max-w-[800px] mx-auto">
-                        <div className="text-center mb-12">
-                            <h1 className="text-xl font-bold font-serif mb-2">DOCUMENT PREVIEW</h1>
-                        </div>
-
-                        <div className="font-serif text-neutral-800 leading-relaxed whitespace-pre-wrap">
-                            {renderDocumentText()}
-                        </div>
-                    </div>
-                </div>
-            </div>
-
-            {/* Right Panel: Workspace */}
-            <div className="flex-1 flex flex-col bg-neutral-50/50" style={{ width: `${100 - leftPanelWidth}%` }}>
+            {/* LEFT PANEL: WORKSPACE (Swapped from Right) */}
+            <div className="flex-1 flex flex-col bg-neutral-50/50 border-r border-neutral-200" style={{ width: `${leftPanelWidth}%` }}>
                 <div className="p-4 border-b border-neutral-200 bg-white flex justify-between items-center">
                     <div className="flex items-center gap-3">
                         <div className="w-8 h-8 bg-blue-600 rounded-lg flex items-center justify-center text-white">
@@ -186,12 +282,6 @@ export default function RfpWorkspace({ documentText, requests, fileName = "Reque
                         </div>
                         <h2 className="font-semibold text-neutral-900">AI Workspace</h2>
                     </div>
-                    <button
-                        onClick={handleExport}
-                        className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium rounded-lg shadow-sm transition-colors"
-                    >
-                        Export All Responses
-                    </button>
                 </div>
 
                 <div className="flex-1 overflow-y-auto p-6 space-y-6">
@@ -202,14 +292,17 @@ export default function RfpWorkspace({ documentText, requests, fileName = "Reque
                             initial={{ opacity: 0, y: 20 }}
                             animate={{ opacity: 1, y: 0 }}
                             onFocus={() => setActiveRequest(req.id)}
-                            onBlur={() => setActiveRequest(null)}
+                            onBlur={() => setActiveRequest(null)} // Consider removing onBlur so selection stays
+                            // Actually, onBlur causes flicker if we click outside. Let's keep it but maybe handle click explicitly.
+                            // Better UX: Click to select, active stays until another is clicked.
+                            onClick={() => setActiveRequest(req.id)}
                             className={`
-                group bg-white border rounded-xl shadow-sm transition-all duration-300
-                ${activeRequest === req.id
+                                group bg-white border rounded-xl shadow-sm transition-all duration-300
+                                ${activeRequest === req.id
                                     ? 'border-blue-400 shadow-md ring-4 ring-blue-50/50'
                                     : 'border-neutral-200 hover:border-neutral-300'
                                 }
-              `}
+                            `}
                         >
                             <div className="p-4 border-b border-neutral-50 flex items-start justify-between bg-neutral-50/30 rounded-t-xl">
                                 <div className="flex gap-3">
@@ -225,12 +318,22 @@ export default function RfpWorkspace({ documentText, requests, fileName = "Reque
                             </div>
 
                             <div className="p-4 space-y-4">
-                                <textarea
-                                    value={responses[req.id] || ''}
-                                    onChange={(e) => handleResponseChange(req.id, e.target.value)}
-                                    placeholder="Type your response here..."
-                                    className="w-full min-h-[100px] p-3 text-sm border-0 bg-neutral-50/50 rounded-lg focus:ring-0 focus:bg-white transition-colors resize-y placeholder:text-neutral-400"
-                                />
+                                <div className="relative">
+                                    <textarea
+                                        value={responses[req.id] || ''}
+                                        onChange={(e) => handleResponseChange(req.id, e.target.value)}
+                                        placeholder="Type your response here..."
+                                        className="w-full min-h-[100px] p-3 text-sm border-0 bg-neutral-50/50 rounded-lg focus:ring-0 focus:bg-white transition-colors resize-y placeholder:text-neutral-400"
+                                    />
+                                    {loadingRequest === req.id && (
+                                        <div className="absolute inset-0 bg-white/60 backdrop-blur-[1px] flex items-center justify-center rounded-lg z-10">
+                                            <div className="flex items-center gap-2 text-blue-600 font-medium text-sm animate-pulse">
+                                                <Sparkles className="w-4 h-4 animate-spin" />
+                                                <span>Drafting with AI...</span>
+                                            </div>
+                                        </div>
+                                    )}
+                                </div>
 
                                 <div className="flex justify-between items-center pt-2 border-t border-dashed border-neutral-100">
                                     <div className="flex flex-wrap gap-2">
@@ -241,8 +344,9 @@ export default function RfpWorkspace({ documentText, requests, fileName = "Reque
                                         {AI_OBJECTIONS.map((obj) => (
                                             <button
                                                 key={obj.label}
-                                                onClick={() => applyObjection(req.id, obj.text)}
-                                                className="px-2.5 py-1 text-xs font-medium text-neutral-600 bg-white border border-neutral-200 rounded-md hover:border-blue-300 hover:text-blue-600 hover:shadow-sm transition-all"
+                                                onClick={() => applyObjection(req.id, obj.label)}
+                                                disabled={loadingRequest === req.id}
+                                                className="px-2.5 py-1 text-xs font-medium text-neutral-600 bg-white border border-neutral-200 rounded-md hover:border-blue-300 hover:text-blue-600 hover:shadow-sm transition-all disabled:opacity-50"
                                             >
                                                 {obj.label}
                                             </button>
@@ -250,10 +354,11 @@ export default function RfpWorkspace({ documentText, requests, fileName = "Reque
                                     </div>
                                     <button
                                         onClick={() => refineResponse(req.id)}
-                                        className="flex items-center gap-1 px-3 py-1.5 text-xs font-medium text-white bg-neutral-900 rounded-lg hover:bg-neutral-800 transition-all"
+                                        disabled={loadingRequest === req.id}
+                                        className="flex items-center gap-1 px-3 py-1.5 text-xs font-medium text-white bg-neutral-900 rounded-lg hover:bg-neutral-800 transition-all disabled:opacity-70"
                                     >
                                         <Sparkles className="w-3 h-3" />
-                                        Refine with AI
+                                        {loadingRequest === req.id ? 'Thinking...' : 'Refine with AI'}
                                     </button>
                                 </div>
                             </div>
@@ -267,6 +372,54 @@ export default function RfpWorkspace({ documentText, requests, fileName = "Reque
                     )}
                 </div>
             </div>
+
+            {/* RIGHT PANEL: DETAILS/PREVIEW (Swapped from Left) */}
+            <div
+                className="flex flex-col bg-white"
+                style={{ width: `${100 - leftPanelWidth}%` }}
+            >
+                <div className="flex items-center justify-between p-4 border-b border-neutral-100 bg-white sticky top-0 z-10">
+                    <div className="flex items-center gap-2">
+                        <div className="p-2 bg-red-100 rounded text-red-600">
+                            <FileText className="w-5 h-5" />
+                        </div>
+                        <div>
+                            <h2 className="font-semibold text-neutral-900 line-clamp-1 max-w-[200px]">Live Preview: {fileName}</h2>
+                            <p className="text-xs text-neutral-500">Auto-scrolling enabled</p>
+                        </div>
+                    </div>
+                    <div className="flex gap-2">
+                        <button
+                            onClick={handleExport}
+                            className="px-3 py-1.5 bg-neutral-900 text-white text-xs font-medium rounded-lg shadow-sm hover:bg-neutral-800"
+                        >
+                            Download PDF
+                        </button>
+                        <button
+                            onClick={handleExportWord}
+                            className="px-3 py-1.5 bg-blue-600 text-white text-xs font-medium rounded-lg shadow-sm hover:bg-blue-700"
+                        >
+                            Download Word
+                        </button>
+                    </div>
+                </div>
+
+                <div
+                    className="flex-1 overflow-y-auto p-8 bg-neutral-50"
+                    ref={documentContainerRef}
+                >
+                    <div className="bg-white shadow-sm ring-1 ring-neutral-200 min-h-[800px] p-12 max-w-[800px] mx-auto">
+                        <div className="text-center mb-12">
+                            <h1 className="text-xl font-bold font-serif mb-2">RESPONSES TO REQUEST FOR PRODUCTION</h1>
+                        </div>
+
+                        <div className="font-serif text-neutral-800 leading-relaxed whitespace-pre-wrap">
+                            {renderDocumentText()}
+                        </div>
+                    </div>
+                </div>
+            </div>
         </div>
     )
 }
+
