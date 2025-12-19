@@ -37,37 +37,30 @@ export default function ResponseGeneratorPage() {
     useEffect(() => {
         async function loadPdf() {
             try {
-                // Dynamically import react-pdf to avoid SSR issues with DOMMatrix
-                const { pdfjs } = await import('react-pdf');
-                pdfjs.GlobalWorkerOptions.workerSrc = `//unpkg.com/pdfjs-dist@${pdfjs.version}/build/pdf.worker.min.js`;
+                // Fetch the PDF file
+                const pdfResponse = await fetch('/rfp.pdf');
+                if (!pdfResponse.ok) throw new Error('Failed to load RFP PDF');
+                const blob = await pdfResponse.blob();
+                const file = new File([blob], 'rfp.pdf', { type: 'application/pdf' });
 
-                const loadingTask = pdfjs.getDocument('/rfp.pdf');
-                const pdf = await loadingTask.promise;
-                let fullText = '';
+                // Send to backend for parsing
+                const formData = new FormData();
+                formData.append('file', file);
 
-                for (let i = 1; i <= pdf.numPages; i++) {
-                    const page = await pdf.getPage(i);
-                    const textContent = await page.getTextContent();
-                    const pageText = textContent.items.map((item: any) => item.str).join(' ');
-                    fullText += pageText + ' ';
-                }
+                const response = await fetch('/api/process-document', {
+                    method: 'POST',
+                    body: formData
+                });
 
-                // Parse requests
-                // Regex to find "REQUEST NO. X" or "REQUEST FOR PRODUCTION NO. X"
-                // and capture the text until the next request or end of file
-                const requestRegex = /(REQUEST (?:FOR PRODUCTION )?NO\. \d+)([\s\S]*?)(?=REQUEST (?:FOR PRODUCTION )?NO\. \d+|$)/gi;
+                if (!response.ok) throw new Error('Failed to process document');
 
-                const parsedRequests: RequestItem[] = [];
-                let match;
-                let idCounter = 1;
+                const data = await response.json();
 
-                while ((match = requestRegex.exec(fullText)) !== null) {
-                    const title = match[1].trim();
-                    const body = match[2].trim();
-
-                    // Heuristic for documents produced
+                // Process requests from API
+                const parsedRequests: RequestItem[] = (data.requests || []).map((req: { id: number; text: string }) => {
+                    // Heuristic for documents produced (reused from previous logic)
                     let docPrefix = 'document';
-                    const lowerBody = body.toLowerCase();
+                    const lowerBody = req.text.toLowerCase();
                     if (lowerBody.includes('bank')) docPrefix = 'bank_statement';
                     else if (lowerBody.includes('tax')) docPrefix = 'tax_return';
                     else if (lowerBody.includes('pay') || lowerBody.includes('income')) docPrefix = 'paystub';
@@ -78,9 +71,9 @@ export default function ResponseGeneratorPage() {
                     else if (lowerBody.includes('medical')) docPrefix = 'medical_record';
                     else if (lowerBody.includes('communication') || lowerBody.includes('email') || lowerBody.includes('text')) docPrefix = 'communication';
 
-                    parsedRequests.push({
-                        id: idCounter,
-                        text: `${title}\n${body}`,
+                    return {
+                        id: req.id,
+                        text: req.text,
                         response: STANDARD_RESPONSE,
                         documentsProduced: `${docPrefix}_001.pdf`,
                         toggles: {
@@ -92,9 +85,8 @@ export default function ResponseGeneratorPage() {
                             irrelevant: false,
                             confidentiality: false
                         }
-                    });
-                    idCounter++;
-                }
+                    };
+                });
 
                 setRequests(parsedRequests);
                 setLoading(false);
