@@ -7,7 +7,7 @@ import RfpWorkspace from '@/components/rfp/RfpWorkspace'
 
 interface ProcessedData {
     text: string
-    requests: { id: number; text: string }[]
+    requests: { id: string | number; text: string }[]
 }
 
 export default function RfpGenPage() {
@@ -151,6 +151,7 @@ export default function RfpGenPage() {
                             documentText={processedData?.text || ''}
                             requests={processedData?.requests || []}
                             fileName={fileName}
+                            onBack={() => setHasUploaded(false)}
                         />
                     </motion.div>
                 )}

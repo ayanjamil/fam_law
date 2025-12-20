@@ -7,7 +7,7 @@ const openai = new OpenAI({
 
 export async function POST(req: NextRequest) {
     try {
-        const { requestText, currentResponse, objectionType, context } = await req.json()
+        const { requestText, currentResponse, objectionType, instruction } = await req.json()
 
         if (!requestText) {
             return NextResponse.json({ error: 'Request text is required' }, { status: 400 })
@@ -114,7 +114,11 @@ ALWAYS answer in a professional law-firm tone.`
             userNotes = `Objection Basis: ${objectionType}. User Notes: ${userNotes}`
         }
 
-        const userPrompt = `
+        if (instruction) {
+            userNotes = `${userNotes}\nUser Method/Instruction: ${instruction}`
+        }
+
+        const promptContent = `
 Request Text: "${requestText}"
 User Shorthand Notes/Objections: "${userNotes}"
 
@@ -124,9 +128,9 @@ Draft the final legal response.`
             model: "gpt-4o",
             messages: [
                 { role: "system", content: systemPrompt },
-                { role: "user", content: userPrompt },
+                { role: "user", content: promptContent },
             ],
-            temperature: 0.2,
+            temperature: 0.2, // Low temp for consistency
         })
 
         const refinedText = completion.choices[0].message.content
