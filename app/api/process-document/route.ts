@@ -8,12 +8,12 @@ function cleanText(text: string): string {
 }
 
 // Helper to extract requests from text (Regex Fallback)
-function extractRequestsFromText(text: string): { id: number; text: string }[] {
-    const requests: { id: number; text: string }[] = []
+function extractRequestsFromText(text: string): { id: string | number; text: string }[] {
+    const requests: { id: string | number; text: string }[] = []
     const normalizedText = cleanText(text)
 
     // Regex to find "REQUEST NO. X" or "REQUEST FOR PRODUCTION NO. X"
-    const requestRegex = /(?:REQUEST\s+(?:FOR\s+PRODUCTION\s+)?(?:NO\.|NUMBER)?\s*(\d+)|REQUEST\s+(\d+))/gi
+    const requestRegex = /(?:REQUEST\s+(?:FOR\s+PRODUCTION\s+)?(?:NO\.|NUMBER)?\s*(\d+(?:\([a-z]\))?)|REQUEST\s+(\d+(?:\([a-z]\))?))/gi
 
     // We want to capture the content *between* these headers.
     // A broader regex to iterate through the text might be better for capturing content.
@@ -73,7 +73,7 @@ export async function POST(req: NextRequest) {
         const buffer = Buffer.from(await file.arrayBuffer())
         const apiKey = process.env.REDUCTO_API_KEY
 
-        let requests: { id: number; text: string }[] = []
+        let requests: { id: string | number; text: string }[] = []
         let fullText = ''
 
         // Strategy: Try Reducto first if API Key exists and file is PDF or Word
@@ -172,14 +172,17 @@ CRITICAL RULES:
 1. **NO HALLUCINATIONS**: Do not invent, summarize, or rephrase any text. Keep the original wording exactly as is.
 2. **PRESERVE STRUCTURE**: Maintain the original line breaks, blank lines between paragraphs, and document layout. Do NOT merge separate paragraphs or requests into a single block of text.
 3. **REMOVE ARTIFACTS ONLY**: Remove markdown tables (pipes '|'), header/footer noise, page numbers, and odd line breaks that break sentences in the middle.
-4. **EXTRACT REQUESTS**: Identify distinct "Request for Production" items.
-5. **STRICT JSON OUTPUT**: Return valid JSON: 
+4. **REMOVE PLACEHOLDERS**: Identify and remove any text that says "<empty>" or similar OCR artifacts. If a field is blank, represent it as such without the placeholder text.
+5. **EXTRACT REQUESTS**: Identify distinct "Request for Production" items.
+6. **HANDLE SUB-REQUESTS**: If a request has distinct sub-parts (e.g., "1(a)", "1(b)" or "4.a", "4.b"), TREAT THEM AS SEPARATE REQUESTS.
+   - Example: If Request 4 has parts (a), (b), and (c), output three separate items in the "requests" array with ids "4(a)", "4(b)", "4(c)".
+7. **STRICT JSON OUTPUT**: Return valid JSON: 
 { 
-  "requests": [{ "id": number, "text": "exact clean text of the request" }],
-  "cleaned_full_text": "The entire document text, but with the table artifacts (pipes) removed. MUST PRESERVE NEWLINES between requests and paragraphs."
+  "requests": [{ "id": "string or number", "text": "exact clean text of the request" }],
+  "cleaned_full_text": "The entire document text, but with the table artifacts (pipes) and '<empty>' placeholders removed. MUST PRESERVE NEWLINES between requests and paragraphs."
 }
-6. **numbering**: If requests are numbered in the text, use those numbers. If not, auto-increment from 1.
-7. **FORMAT**: The "text" field must be a single string with normal spacing and punctuation.`
+8. **numbering**: Use the exact numbering/lettering found in the text for the "id" field.
+9. **FORMAT**: The "text" field must be a single string with normal spacing and punctuation.`
                                 },
                                 {
                                     role: "user",

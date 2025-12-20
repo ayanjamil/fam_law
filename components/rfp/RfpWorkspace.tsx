@@ -7,14 +7,16 @@ import {
     Sparkles,
     FileText,
     Search,
-    Maximize2
+    Maximize2,
+    Send,
+    ArrowLeft
 } from 'lucide-react'
 import { jsPDF } from 'jspdf'
 import { Document, Packer, Paragraph, TextRun, HeadingLevel } from 'docx'
 import { saveAs } from 'file-saver'
 
 interface RfpRequest {
-    id: number
+    id: string | number
     text: string
 }
 
@@ -22,6 +24,7 @@ interface RfpWorkspaceProps {
     documentText: string
     requests: RfpRequest[]
     fileName?: string
+    onBack?: () => void
 }
 
 const AI_OBJECTIONS = [
@@ -34,15 +37,15 @@ const AI_OBJECTIONS = [
     { label: "Confidentiality", text: "Objection. This request seeks confidential and proprietary information." }
 ]
 
-export default function RfpWorkspace({ documentText, requests, fileName = "Request For Production.pdf" }: RfpWorkspaceProps) {
-    const [activeRequest, setActiveRequest] = useState<number | null>(null)
-    const [responses, setResponses] = useState<Record<number, string>>({})
-    const [loadingRequest, setLoadingRequest] = useState<number | null>(null)
+export default function RfpWorkspace({ documentText, requests, fileName = "Request For Production.pdf", onBack }: RfpWorkspaceProps) {
+    const [activeRequest, setActiveRequest] = useState<string | number | null>(null)
+    const [responses, setResponses] = useState<Record<string | number, string>>({})
+    const [loadingRequest, setLoadingRequest] = useState<string | number | null>(null)
     const [leftPanelWidth, setLeftPanelWidth] = useState(50) // Percentage
 
     // Refs for scrolling
     const documentContainerRef = useRef<HTMLDivElement>(null)
-    const requestRefs = useRef<Record<number, HTMLSpanElement | null>>({})
+    const requestRefs = useRef<Record<string | number, HTMLSpanElement | null>>({})
 
     // Auto-scroll effect
     useEffect(() => {
@@ -54,11 +57,17 @@ export default function RfpWorkspace({ documentText, requests, fileName = "Reque
         }
     }, [activeRequest])
 
-    const handleResponseChange = (id: number, text: string) => {
+    const handleResponseChange = (id: string | number, text: string) => {
         setResponses(prev => ({ ...prev, [id]: text }))
     }
 
-    const generateAIResponse = async (id: number, type: 'objection' | 'refine', data: string) => {
+    const [instructions, setInstructions] = useState<Record<string | number, string>>({})
+
+    const handleInstructionChange = (id: string | number, text: string) => {
+        setInstructions(prev => ({ ...prev, [id]: text }))
+    }
+
+    const generateAIResponse = async (id: string | number, type: 'objection' | 'refine', data: string, instruction?: string) => {
         setLoadingRequest(id)
         const currentReq = requests.find(r => r.id === id)
         if (!currentReq) {
@@ -69,12 +78,15 @@ export default function RfpWorkspace({ documentText, requests, fileName = "Reque
         try {
             const payload: any = {
                 requestText: currentReq.text,
+                currentResponse: responses[id] || "", // Always send active response context
             }
 
             if (type === 'objection') {
                 payload.objectionType = data
-            } else {
-                payload.currentResponse = data
+            }
+
+            if (instruction) {
+                payload.instruction = instruction
             }
 
             const res = await fetch('/api/refine-response', {
@@ -96,86 +108,57 @@ export default function RfpWorkspace({ documentText, requests, fileName = "Reque
         }
     }
 
-    const applyObjection = (id: number, objectionLabel: string) => {
+    const applyObjection = (id: string | number, objectionLabel: string) => {
         generateAIResponse(id, 'objection', objectionLabel)
     }
 
-    const refineResponse = (id: number) => {
-        const current = responses[id] || ""
-        generateAIResponse(id, 'refine', current)
+    const sendInstruction = (id: string | number) => {
+        const inst = instructions[id]
+        if (!inst?.trim()) {
+            // Allow refining without instruction (refine current text)
+            generateAIResponse(id, 'refine', responses[id] || "")
+            return
+        }
+
+        generateAIResponse(id, 'refine', responses[id] || "", inst)
+        setInstructions(prev => ({ ...prev, [id]: '' }))
     }
 
     // Helper to highlight active request text and show response inline
     const renderDocumentText = () => {
-        if (!requests.length) return documentText
+        if (!requests.length) return (
+            <div className="text-neutral-400 italic">
+                Upload a file to see extracted requests here.
+            </div>
+        )
 
-        // This is a simplified approach. In a real app, we'd need more robust tokenization.
-        // We will try to reconstruct the document by iterating through requests and existing text.
-        // For this demo, let's assume the text chunks are split by the exact request strings.
-
-        // We'll create a map of text segments to render.
-        // Since we can't easily "split" complex PDFs by string matching uniquely if there are duplicates,
-        // we will try to just highlight found matches.
-
-        // Better approach for the demo: 
-        // We will split the full text by the request texts we found.
-        let nodes: React.ReactNode[] = []
-        let currentText = documentText
-        let globalOffset = 0
-
-        // We need to sort requests by their position in text to process linearly
-        // But our parsing logic didn't give us indices here (it did in the route, but we only have text).
-        // Let's assume the 'requests' array is in order.
-
-        let lastIndex = 0
-
-        // We will build an array of elements.
-        // This is tricky without exact indices. Let's do a best-effort split.
-        // We will treat the whole document as a sequence of: [Text Before] -> [Request] -> [Response Preview] -> [Text After]...
-
-        // To make this work visually for the user without complex re-parsing:
-        // We will match the first occurrence of each request text after the previous one.
-
-        let remainingText = documentText
-
-        requests.forEach((req, idx) => {
-            const matchIndex = remainingText.indexOf(req.text)
-            if (matchIndex !== -1) {
-                // Text before this request
-                const before = remainingText.slice(0, matchIndex)
-                nodes.push(<span key={`text-${idx}`}>{before}</span>)
-
-                // The request itself (Highlighted if active)
-                nodes.push(
-                    <span
-                        key={`req-${req.id}`}
+        return (
+            <div className="space-y-8">
+                {requests.map((req, idx) => (
+                    <div
+                        key={req.id}
                         ref={(el) => { requestRefs.current[req.id] = el }}
-                        className={`transition-colors duration-300 rounded px-1 -mx-1 ${activeRequest === req.id ? 'bg-yellow-200' : 'hover:bg-yellow-50'}`}
+                        className={`transition-all duration-300 rounded-lg p-2 -m-2 ${activeRequest === req.id ? 'bg-yellow-50' : ''}`}
                     >
-                        {req.text}
-                    </span>
-                )
-
-                // The RESPONSE Preview (Inline)
-                const currentResponse = responses[req.id]
-                if (currentResponse) {
-                    nodes.push(
-                        <div key={`resp-${req.id}`} className="my-4 pl-4 border-l-2 border-blue-500 bg-blue-50 p-3 rounded-r-lg">
-                            <span className="block text-xs font-bold text-blue-600 mb-1">DRAFT RESPONSE:</span>
-                            <span className="font-sans text-blue-900 whitespace-pre-wrap">{currentResponse}</span>
+                        <div className="font-bold text-neutral-900 mb-2">
+                            {req.id}.
                         </div>
-                    )
-                }
+                        <div className="mb-4 text-neutral-800">
+                            {req.text}
+                        </div>
 
-                // Advance
-                remainingText = remainingText.slice(matchIndex + req.text.length)
-            }
-        })
-
-        // Add any remaining text
-        nodes.push(<span key="text-end">{remainingText}</span>)
-
-        return nodes
+                        {responses[req.id] && (
+                            <div className="ml-4 pl-4 border-l-2 border-blue-500 bg-blue-50/50 p-4 rounded-r-lg">
+                                <span className="block text-xs font-bold text-blue-600 mb-2 uppercase tracking-wider">Draft Response</span>
+                                <span className="font-sans text-blue-900 whitespace-pre-wrap leading-relaxed">
+                                    {responses[req.id]}
+                                </span>
+                            </div>
+                        )}
+                    </div>
+                ))}
+            </div>
+        )
     }
 
     // Export responses to a PDF file
@@ -277,6 +260,11 @@ export default function RfpWorkspace({ documentText, requests, fileName = "Reque
             <div className="flex-1 flex flex-col bg-neutral-50/50 border-r border-neutral-200" style={{ width: `${leftPanelWidth}%` }}>
                 <div className="p-4 border-b border-neutral-200 bg-white flex justify-between items-center">
                     <div className="flex items-center gap-3">
+                        {onBack && (
+                            <button onClick={onBack} className="p-2 hover:bg-neutral-100 rounded-full transition-colors" title="Back to Upload">
+                                <ArrowLeft className="w-5 h-5 text-neutral-600" />
+                            </button>
+                        )}
                         <div className="w-8 h-8 bg-blue-600 rounded-lg flex items-center justify-center text-white">
                             <Bot className="w-5 h-5" />
                         </div>
@@ -335,9 +323,9 @@ export default function RfpWorkspace({ documentText, requests, fileName = "Reque
                                     )}
                                 </div>
 
-                                <div className="flex justify-between items-center pt-2 border-t border-dashed border-neutral-100">
-                                    <div className="flex flex-wrap gap-2">
-                                        <div className="flex items-center gap-1.5 text-xs font-semibold text-blue-600 mr-2">
+                                <div className="flex flex-col gap-3 pt-3 border-t border-dashed border-neutral-100">
+                                    <div className="flex items-center gap-2 overflow-x-auto pb-1 scrollbar-hide">
+                                        <div className="flex items-center gap-1.5 text-xs font-semibold text-blue-600 shrink-0">
                                             <Sparkles className="w-3.5 h-3.5" />
                                             <span>Smart Objections:</span>
                                         </div>
@@ -346,20 +334,32 @@ export default function RfpWorkspace({ documentText, requests, fileName = "Reque
                                                 key={obj.label}
                                                 onClick={() => applyObjection(req.id, obj.label)}
                                                 disabled={loadingRequest === req.id}
-                                                className="px-2.5 py-1 text-xs font-medium text-neutral-600 bg-white border border-neutral-200 rounded-md hover:border-blue-300 hover:text-blue-600 hover:shadow-sm transition-all disabled:opacity-50"
+                                                className="px-2.5 py-1 text-xs font-medium text-neutral-600 bg-white border border-neutral-200 rounded-md hover:border-blue-300 hover:text-blue-600 hover:shadow-sm transition-all disabled:opacity-50 whitespace-nowrap shrink-0"
                                             >
                                                 {obj.label}
                                             </button>
                                         ))}
                                     </div>
-                                    <button
-                                        onClick={() => refineResponse(req.id)}
-                                        disabled={loadingRequest === req.id}
-                                        className="flex items-center gap-1 px-3 py-1.5 text-xs font-medium text-white bg-neutral-900 rounded-lg hover:bg-neutral-800 transition-all disabled:opacity-70"
-                                    >
-                                        <Sparkles className="w-3 h-3" />
-                                        {loadingRequest === req.id ? 'Thinking...' : 'Refine with AI'}
-                                    </button>
+
+                                    <div className="flex gap-2 w-full">
+                                        <input
+                                            type="text"
+                                            value={instructions[req.id] || ''}
+                                            onChange={(e) => handleInstructionChange(req.id, e.target.value)}
+                                            onKeyDown={(e) => e.key === 'Enter' && sendInstruction(req.id)}
+                                            placeholder="Add instructions (e.g. 'Make shorter')..."
+                                            disabled={loadingRequest === req.id}
+                                            className="flex-1 px-3 py-2 text-sm border border-neutral-200 rounded-lg focus:outline-none focus:border-blue-400 disabled:bg-neutral-50 placeholder:text-neutral-400 min-w-0"
+                                        />
+                                        <button
+                                            onClick={() => sendInstruction(req.id)}
+                                            disabled={loadingRequest === req.id}
+                                            className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-white bg-neutral-900 rounded-lg hover:bg-neutral-800 disabled:opacity-70 disabled:cursor-not-allowed transition-all whitespace-nowrap shrink-0"
+                                        >
+                                            <Sparkles className={`w-4 h-4 ${loadingRequest === req.id ? 'animate-spin' : ''}`} />
+                                            {loadingRequest === req.id ? 'Refining...' : 'Refine'}
+                                        </button>
+                                    </div>
                                 </div>
                             </div>
                         </motion.div>
@@ -409,9 +409,7 @@ export default function RfpWorkspace({ documentText, requests, fileName = "Reque
                     ref={documentContainerRef}
                 >
                     <div className="bg-white shadow-sm ring-1 ring-neutral-200 min-h-[800px] p-12 max-w-[800px] mx-auto">
-                        <div className="text-center mb-12">
-                            <h1 className="text-xl font-bold font-serif mb-2">RESPONSES TO REQUEST FOR PRODUCTION</h1>
-                        </div>
+
 
                         <div className="font-serif text-neutral-800 leading-relaxed whitespace-pre-wrap">
                             {renderDocumentText()}
